@@ -202,3 +202,24 @@ async def handle_intrusion(interaction: discord.Interaction):
         await owner.send(embed=alert)
     except Exception as e:
         print(f"שגיאה בהודעה פרטית: {e}")
+# ==========================================
+#          🚀 סיום והפעלת הבוט 🚀
+# ==========================================
+
+@bot.event
+async def on_ready():
+    # סנכרון של כל פקודות הסלאש החדשות בדיסקורד
+    await bot.tree.sync()
+    print(f"הבוט מחובר בהצלחה בתור {bot.user}")
+
+# הפעלת שרת האינטרנט ברקע בשביל הניטור של UptimeRobot
+keep_alive()
+
+# משיכת הטוקן המאובטח מהשרת או הרצה מקומית
+TOKEN = os.getenv('DISCORD_TOKEN')
+
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    # אם אתה מריץ במחשב ואין משתנה סביבה, שים את הטוקן שלך בתוך המרכאות:
+    bot.run("הטוקן_הסודי_שלך_כאן")
