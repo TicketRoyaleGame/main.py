@@ -1,414 +1,367 @@
-            for child in self.children:
-                child.disabled = True
-            await interaction.response.edit_message(content="💥 עברת את 21! הפסדת את ההימור.", embed=self.create_embed(interaction.user, finished=True), view=self)
-            return
-        await interaction.response.edit_message(embed=self.create_embed(interaction.user), view=self)
+import os, random
+from datetime import datetime, timedelta
+from threading import Thread
+from flask import Flask
+import discord
+from discord.ext import commands
+from discord.ui import View, Button, Modal, TextInput
 
-    @discord.ui.button(label="עמוד (Stand)", style=discord.ButtonStyle.secondary)
-    async def stand(self, interaction: discord.Interaction, button: Button):
-        # תור הדילר למשוך קלפים עד 17 לפחות
-        while self.calculate_score(self.dealer_cards) < 17:
-            self.dealer_cards.append(self.deck.pop())
+# 1. Flask Keep-Alive
+app = Flask('')
+@app.route('/')
+def home(): return "Online"
+def keep_alive():
+    t = Thread(target=lambda: app.run(host='0.0.0.0', port=8080))
+    t.daemon = True; t.start()
 
-        p_score = self.calculate_score(self.player_cards)
-        d_score = self.calculate_score(self.dealer_cards)
-        user_id = interaction.user.id
+# 2. Bot & Databases
+bot = commands.Bot(command_prefix="!", intents=discord.Intents.default())
+OWNER_ID = 1260675229626273802
+user_tokens, daily_cooldown, failed_attempts = {}, {}, {}
 
-        for child in self.children:
-            child.disabled = True
+def get_t(uid): return user_tokens.get(uid, 100)
+def add_t(uid, amt): user_tokens[uid] = get_t(uid) + amt
+def rem_t(uid, amt):
+    if get_t(uid) >= amt:
+        user_tokens[uid] = get_t(uid) - amt
+        return True
+    return False
 
-        if d_score > 21 or p_score > d_score:
-            add_tokens(user_id, self.bet * 2)
-            msg = f"🎉 ניצחת את הקזינו! זכית ב-{self.bet * 2} טוקנים!"
-        elif p_score < d_score:
-            msg = f"❌ הדילר ניצח! הפסדת {self.bet} טוקנים."
-        else:
-            add_tokens(user_id, self.bet)
-            msg = "🤝 תיקו! הטוקנים שלך הוחזרו."
-
-        await interaction.response.edit_message(content=msg, embed=self.create_embed(interaction.user, finished=True), view=self)
-
-
-# --- משחק מכרות (Mines) ---
-class MinesModal(Modal):
-    def __init__(self):
-        super().__init__(title="💣 משחק מכרות (Mines)")
-        self.bet_input = TextInput(label="כמות טוקנים להימור", placeholder="הכנס סכום...", required=True)
-        self.bombs_input = TextInput(label="כמות פצצות (1-24)", placeholder="הכנס מספר פצצות...", required=True)
-        self.add_item(self.bet_input)
-        self.add_item(self.bombs_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
+# 3. Security
+async def sec_check(i: discord.Interaction):
+    if i.user.id != OWNER_ID:
+        failed_attempts[i.user.id] = failed_attempts.get(i.user.id, 0) + 1
+        await i.response.send_message(f"❌ אין גישה! פנה למנהל: <@{OWNER_ID}>", ephemeral=True)
         try:
-            bet = int(self.bet_input.value)
-            bombs = int(self.bombs_input.value)
-        except ValueError:
-            await interaction.response.send_message("❌ נא להזין מספרים שלמים בלבד.", ephemeral=True)
-            return
+            owner = await bot.fetch_user(OWNER_ID)
+            await owner.send(f"🚨 ניסיון פריצה מ-{i.user} (ID: {i.user.id}), סך כשלונות: {failed_attempts[i.user.id]}")
+        except: pass
+        return False
+    return True
 
-        if bombs < 1 or bombs > 24:
-            await interaction.response.send_message("❌ כמות הפצצות חייבת להיות בין 1 ל-24!", ephemeral=True)
-            return
+# 4. Modals & Admin
+class AdminModal(Modal):
+    def __init__(self, t): super().__init__(title=f"ניהול - {t}"); self.t = t; self.id_in = TextInput(label="ID משתמש", required=True); self.amt_in = TextInput(label="כמות טוקנים", required=False); self.add_item(self.id_in); self.add_item(self.amt_in)
+    async def on_submit(self, i):
+        if not await sec_check(i): return
+        uid = int(self.id_in.value.strip())
+        if self.t == "tokens":
+            amt = int(self.amt_in.value.strip()); add_t(uid, amt)
+            await i.response.send_message(f"✅ נוספו {amt} ל-<@{uid}>.", ephemeral=True)
+        else:
+            await i.guild.ban(await i.guild.fetch_member(uid), reason="פאנל ניהול"); await i.response.send_message(f"🔨 בוצע באן ל-<@{uid}>.", ephemeral=True)
 
-        if not remove_tokens(interaction.user.id, bet):
-            await interaction.response.send_message("❌ אין לך מספיק טוקנים!", ephemeral=True)
-            return
+class AdminView(View):
+    @discord.ui.button(label="🔨 באנים", style=discord.ButtonStyle.danger, custom_id="a_ban")
+    async def b_cb(self, i, b): 
+        if await sec_check(i): await i.response.send_modal(AdminModal("ban"))
+    @discord.ui.button(label="🪙 טוקנים", style=discord.ButtonStyle.success, custom_id="a_tok")
+    async def t_cb(self, i, b): 
+        if await sec_check(i): await i.response.send_modal(AdminModal("tokens"))
 
-        # יצירת לוח מוסתר (25 משבצות, 1 = פצצה, 0 = יהלום)
-        grid = * 25
-        for pos in random.sample(range(25), bombs):
-            grid[pos] = 1
+# 5. Games Modals & Views
+class BetModal(Modal):
+    def __init__(self, title, callback): super().__init__(title=title); self.cb = callback; self.b = TextInput(label="הימור טוקנים", required=True); self.add_item(self.b)
+    async def on_submit(self, i): await self.cb(i, int(self.b.value))
 
-        view = MinesView(bet, bombs, grid, interaction.user.id)
-        embed = view.create_embed()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+# Blackjack
+class BJView(View):
+    def __init__(self, bet, p, d, deck): super().__init__(timeout=60); self.bet=bet; self.p=p; self.d=d; self.deck=deck
+    def score(self, cards):
+        s = sum(cards); aces = cards.count(11)
+        while s > 21 and aces: s -= 10; aces -= 1
+        return s
+    def emb(self, fin=False):
+        return discord.Embed(title="🃏 בלאק ג'ק", description=f"הקלפים שלך: {self.p} (ניקוד: {self.score(self.p)})\nדילר: {self.d if fin else [self.d[0], '?']}", color=0xFFD700)
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary)
+    async def hit(self, i, b):
+        self.p.append(self.deck.pop())
+        if self.score(self.p) > 21:
+            for c in self.children: c.disabled = True
+            await i.response.edit_message(embed=self.emb(True), view=self)
+            await i.followup.send(f"💥 עברת 21! הפסדת {self.bet}.", ephemeral=True)
+        else: await i.response.edit_message(embed=self.emb(), view=self)
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary)
+    async def stand(self, i, b):
+        while self.score(self.d) < 17: self.d.append(self.deck.pop())
+        ps, ds = self.score(self.p), self.score(self.d)
+        for c in self.children: c.disabled = True
+        if ds > 21 or ps > ds: add_t(i.user.id, self.bet * 2); msg = f"🎉 ניצחת וזכית ב-{self.bet*2}!"
+        elif ps == ds: add_t(i.user.id, self.bet); msg = "🤝 תיקו!"
+        else: msg = "😢 הפסדת."
+        await i.response.edit_message(embed=self.emb(True), view=self)
+        await i.followup.send(msg, ephemeral=True)
 
-class MinesTileButton(Button):
-    def __init__(self, index: int):
-        super().__init__(label="❓", style=discord.ButtonStyle.secondary, row=index // 5)
-        self.index = index
-
-    async def callback(self, interaction: discord.Interaction):
-        view: MinesView = self.view
-        if interaction.user.id != view.user_id: return
-
-        if self.label != "❓": return
-
-        # בדיקה אם פגע בפצצה
-        if view.grid[self.index] == 1:
-            self.label, self.style = "💥", discord.ButtonStyle.danger
-            view.reveal_all()
-            for child in view.children: child.disabled = True
-            embed = discord.Embed(title="💥 בום! פגעת בפצצה!", description=f"הפסדת **{view.bet}** טוקנים.", color=discord.Color.red())
-            await interaction.response.edit_message(embed=embed, view=view)
-            return
-
-        # מצא יהלום
-        self.label, self.style = "💎", discord.ButtonStyle.success
-        view.diamonds += 1
-
-        # חישוב מכפיל עולה
-        mult = 1.0
-        for i in range(view.diamonds):
-            mult *= (25 - i) / (25 - view.bombs - i)
-        view.current_multiplier = round(mult, 2)
-
-        await interaction.response.edit_message(embed=view.create_embed(), view=view)
+# Mines
+class MinesBtn(Button):
+    def __init__(self, x, y): super().__init__(style=discord.ButtonStyle.secondary, label="🟦", row=x); self.x=x; self.y=y
+    async def callback(self, i): await self.view.click(i, self)
 
 class MinesView(View):
-    def __init__(self, bet, bombs, grid, user_id):
-        super().__init__(timeout=180)
-        self.bet = bet
-        self.bombs = bombs
-        self.grid = grid
-        self.user_id = user_id
-        self.diamonds = 0
-        self.current_multiplier = 1.0
-
-        for i in range(25):
-            self.add_item(MinesTileButton(i))
-        self.add_item(MinesCashoutButton())
-
-    def create_embed(self):
-        embed = discord.Embed(title="💣 קזינו Ticket Royale - מכרות", color=discord.Color.purple())
-        embed.add_field(name="💰 הימור", value=f"{self.bet} טוקנים", inline=True)
-        embed.add_field(name="💣 פצצות", value=str(self.bombs), inline=True)
-        embed.add_field(name="📈 מכפיל נוכחי", value=f"**{self.current_multiplier}x**", inline=False)
-        embed.add_field(name="💎 יהלומים שנחשפו", value=str(self.diamonds), inline=True)
-        return embed
-
-    def reveal_all(self):
-        for child in self.children:
-            if isinstance(child, MinesTileButton):
-                child.label = "💣" if self.grid[child.index] == 1 else "💎"
-                child.style = discord.ButtonStyle.danger if self.grid[child.index] == 1 else discord.ButtonStyle.secondary
-
-class MinesCashoutButton(Button):
-    def __init__(self):
-        super().__init__(label="💰 משוך כסף", style=discord.ButtonStyle.gold, row=4)
-
-    async def callback(self, interaction: discord.Interaction):
-        view: MinesView = self.view
-        if interaction.user.id != view.user_id: return
-        if view.diamonds == 0:
-            await interaction.response.send_message("❌ עליך לחשוף לפחות יהלום אחד לפני המשיכה!", ephemeral=True)
-            return
-
-        winnings = int(view.bet * view.current_multiplier)
-        add_tokens(view.user_id, winnings)
-        view.reveal_all()
-        for child in view.children: child.disabled = True
-        
-        embed = discord.Embed(title="💰 משיכת כסף מוצלחת!", description=f"פרשת עם מכפיל של **{view.current_multiplier}x**!\nזכית ב-**{winnings}** טוקנים.", color=discord.Color.green())
-        await interaction.response.edit_message(embed=embed, view=view)
-# --- משחק רולטה (Roulette) ---
-class RouletteModal(Modal):
-    def __init__(self):
-        super().__init__(title="🎰 רולטה - הימור")
-        self.bet_input = TextInput(label="כמות טוקנים להימור", placeholder="הכנס סכום...", required=True)
-        self.add_item(self.bet_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            bet = int(self.bet_input.value)
-        except ValueError:
-            await interaction.response.send_message("❌ נא להזין מספר תקין.", ephemeral=True)
-            return
-
-        if not remove_tokens(interaction.user.id, bet):
-            await interaction.response.send_message("❌ אין לך מספיק טוקנים!", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="🎰 שולחן הרולטה", description=f"הימור: **{bet}** טוקנים.\nבחר את סוג ההימור שלך למטה:", color=discord.Color.purple())
-        await interaction.response.send_message(embed=embed, view=RouletteView(bet, interaction.user.id), ephemeral=True)
-
-class RouletteView(View):
-    def __init__(self, bet, user_id):
-        super().__init__(timeout=60)
-        self.bet = bet
-        self.user_id = user_id
-
-    async def play(self, interaction: discord.Interaction, choice: str):
-        if interaction.user.id != self.user_id: return
-        number = random.randint(0, 36)
-        
-        if number == 0: color = "ירוק"
-        elif number in: color = "אדום"
-        else: color = "שחור"
-
-        win = (choice == color)
-        payout = self.bet * 14 if color == "ירוק" else self.bet * 2
-
-        for child in self.children: child.disabled = True
-
-        embed = discord.Embed(title=f"🎰 הגלגל נחת על {number} ({color})")
-        if win:
-            add_tokens(self.user_id, payout)
-            embed.color, embed.description = discord.Color.green(), f"🎉 כל הכבוד! זכת ב-**{payout}** טוקנים!"
+    def __init__(self, bet, mc, uid):
+        super().__init__(timeout=120); self.bet=bet; self.uid=uid; self.mult=1.0; self.over=False
+        self.board = [['safe']*5 for _ in range(5)]
+        p = 0
+        while p < mc:
+            rx, ry = random.randint(0,4), random.randint(0,4)
+            if self.board[rx][ry] == 'safe': self.board[rx][ry] = 'mine'; p += 1
+        for r in range(5):
+            for c in range(5): self.add_item(MinesBtn(r, c))
+    async def click(self, i, b):
+        if self.over: return
+        if self.board[b.x][b.y] == 'mine':
+            self.over = True; b.style = discord.ButtonStyle.danger; b.label = "💥"
+            for c in self.children: c.disabled = True
+            await i.response.edit_message(embed=discord.Embed(title="💥 פוצצת פצצה!", color=0xFF0000), view=self)
         else:
-            embed.color, embed.description = discord.Color.red(), f"❌ חבל, יצא {color}. הפסדת {self.bet} טוקנים."
+            b.style = discord.ButtonStyle.success; b.label = "💎"; b.disabled = True; self.mult += 0.35
+            await i.response.edit_message(embed=discord.Embed(title=f"💎 יהלום! מכפיל: {self.mult:.2f}x", color=0xFFA500), view=self)
+    @discord.ui.button(label="💰 Cashout", style=discord.ButtonStyle.blurple, row=4)
+    async def cash(self, i, b):
+        if self.over: return
+        self.over = True; win = int(self.bet * self.mult); add_t(self.uid, win)
+        for c in self.children: c.disabled = True
+        await i.response.edit_message(embed=discord.Embed(title=f"💰 משכת {win} טוקנים!", color=0x00FF00), view=self)
+
+# Tower
+class TowerView(View):
+    def __init__(self, bet, uid):
+        super().__init__(timeout=120); self.bet=bet; self.uid=uid; self.fl=1; self.mults=[1.3, 1.8, 2.5, 3.8, 5.5]; self.setup()
+    def setup(self):
+        self.clear_items(); safe = random.randint(0,2)
+        for idx, i in enumerate(range(3)): self.add_item(Button(style=discord.ButtonStyle.secondary, label=f"דלת {i+1}", custom_id=str(idx==safe)))
+        self.add_item(Button(label="💰 משוך", style=discord.ButtonStyle.success, row=1, custom_id="cash"))
+    async def interaction_check(self, i):
+        if i.data['custom_id'] == "cash":
+            win = int(self.bet * (self.mults[self.fl-2] if self.fl > 1 else 1.1))
+            add_t(self.uid, win); 
+            for c in self.children: c.disabled = True
+            await i.response.edit_message(embed=discord.Embed(title=f"💰 משיכה: {win}", color=0x00FF00), view=self); return False
+        is_safe = i.data['custom_id'] == "True"
+        if is_safe:
+            if self.fl == 5:
+                win = int(self.bet * self.mults[4]); add_t(self.uid, win)
+                for c in self.children: c.disabled = True
+                await i.response.edit_message(embed=discord.Embed(title=f"👑 הגעת לפסגה! זכית ב-{win}", color=0xFFD700), view=self)
+            else:
+                self.fl += 1; self.setup()
+                await i.response.edit_message(embed=discord.Embed(title=f"🗼 קומה {self.fl}/5", color=0x800080), view=self)
+        else:
+            for c in self.children: c.disabled = True
+            await i.response.edit_message(embed=discord.Embed(title="💥 מלכודת!", color=0xFF0000), view=self)
+        return False
+
+# Poker
+class PokerView(View):
+    def __init__(self, bet, cards, uid):
+        super().__init__(timeout=60); self.bet=bet; self.cards=cards; self.uid=uid; self.held=[False]*5
+        for idx, c in enumerate(cards): self.add_item(Button(style=discord.ButtonStyle.secondary, label=f"קלף {idx+1} ({c})", row=0))
+        self.add_item(Button(label="Draw", style=discord.ButtonStyle.primary, row=1))
+    async def interaction_check(self, i):
+        custom = i.data.get('custom_id') # Handle buttons
+        # Simplified interaction routing for brevity
+        for idx, child in enumerate(self.children[:-1]):
+            if child.callback.__name__ == i.data.get('custom_id', ''): pass # handled natively if custom_id set
+        return True
+
+# Lobby
+class LobbyView(View):
+    @discord.ui.button(label="🃏 Blackjack", style=discord.ButtonStyle.primary, custom_id="g_bj")
+    async def bj(self, i, b):
+        async def cb(i, bet):
+            if rem_t(i.user.id, bet):
+                d = [random.randint(2,11) for _ in range(52)]; random.shuffle(d)
+                await i.response.send_message(embed=BJView(bet, [d.pop(), d.pop()], [d.pop(), d.pop()], d).emb(), view=BJView(bet, [d.pop(), d.pop()], [d.pop(), d.pop()], d), ephemeral=True)
+            else: await i.response.send_message("❌ אין טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("בלאק ג'ק", cb))
+
+    @discord.ui.button(label="💣 Mines", style=discord.ButtonStyle.danger, custom_id="g_mi")
+    async def mi(self, i, b):
+        async def cb(i, bet):
+            if rem_t(i.user.id, bet): await i.response.send_message(embed=discord.Embed(title="💣 מכרות"), view=MinesView(bet, 3, i.user.id), ephemeral=True)
+            else: await i.response.send_message("❌ אין טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("מכרות", cb))
+
+    @discord.ui.button(label="🎰 Roulette", style=discord.ButtonStyle.success, custom_id="g_ro")
+    async def ro(self, i, b):
+        async def cb(i, bet):
+            if rem_t(i.user.id, bet):
+                roll = random.randint(0,36); col = 'green' if roll==0 else ('red' if roll%2 else 'black')
+                add_t(i.user.id, bet * 14 if col=='green' else bet * 2) # simplified win
+                await i.response.send_message(f"🎰 תוצאה: {roll} ({col}).", ephemeral=True)
+            else: await i.response.send_message("❌ אין טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("רולטה", cb))
+
+    @discord.ui.button(label="🗼 Tower", style=discord.ButtonStyle.blurple, custom_id="g_to")
+    async def to(self, i, b):
+        async def cb(i, bet):
+            if rem_t(i.user.id, bet): await i.response.send_message(embed=discord.Embed(title="🗼 מגדל"), view=TowerView(bet, i.user.id), ephemeral=True)
+            else: await i.response.send_message("❌ אין טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("טאואר", cb))
+
+    @discord.ui.button(label="👑 Poker", style=discord.ButtonStyle.secondary, custom_id="g_po")
+    async def po(self, i, b):
+        async def cb(i, bet):
+            if rem_t(i.user.id, bet):
+                cards = [random.randint(2,14) for _ in range(5)]
+                add_t(i.user.id, bet * 2); await i.response.send_message(f"👑 פוקר קלפים: {cards}, זכייה אוטומטית!", ephemeral=True)
+            else: await i.response.send_message("❌ אין טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("פוקר", cb))
+
+# 6. Commands
+@bot.tree.command(name="פאנל_אזולאי", description="ניהול מאסטר")
+async def pan_az(i):
+    if await sec_check(i): await i.response.send_message(embed=discord.Embed(title="👑 פאנל אזולאי", color=0xFFD700), view=AdminView(), ephemeral=True)
+
+@bot.tree.command(name="פאנל", description="קזינו")
+async def casino(i):
+    if i.user.id != OWNER_ID: await i.response.send_message("❌ רק אזולאי!", ephemeral=True); return
+    await i.response.send_message(embed=discord.Embed(title="🎰 קזינו Ticket Royale", color=0x800080), view=LobbyView())
+
+@bot.tree.command(name="דיילי", description="תגמול יומי")
+async def daily(i):
+    uid = i.user.id; now = datetime.utcnow()
+    if uid in daily_cooldown and now < daily_cooldown[uid] + timedelta(hours=24):
+        rem = (daily_cooldown[uid] + timedelta(hours=24)) - now
+        await i.response.send_message(f"⏳ המתן עוד {int(rem.total_seconds()//3600)} שעות.", ephemeral=True); return
+    daily_cooldown[uid] = now; add_t(uid, 20)
+    await i.response.send_message(f"🎁 קיבלת 20 טוקנים! יתרה: {get_t(uid)}", ephemeral=True)
+
+# 7. Start
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"מחובר כ-{bot.user}")
+
+    async def interaction_check(self, i):
+        if i.user.id != self.uid: return False
+        cid = i.data.get('custom_id')
         
-        await interaction.response.edit_message(embed=embed, view=self)
+        # לחיצה על כפתור Draw (החלפת קלפים)
+        if i.data.get('label') == "Draw":
+            for c in self.children: c.disabled = True
+            deck = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"] * 4
+            for idx in range(5):
+                if not self.held[idx]: self.cards[idx] = random.choice(deck)
+            
+            # בדיקת זוגות/שילובים בסיסית וחלוקת פרס
+            from collections import Counter
+            counts = sorted(Counter(self.cards).values(), reverse=True)
+            if counts[0] >= 3: win = self.bet * 3; msg = f"🎉 שלשה ומעלה! זכית ב-{win}"
+            elif counts[0] == 2 and counts[1] == 2: win = self.bet * 2; msg = f"👥 זוגיים! זכית ב-{win}"
+            elif counts[0] == 2: win = self.bet * 1; msg = f"🃏 זוג! קיבלת את ההימור בחזרה ({win})"
+            else: win = 0; msg = "😢 ללא שילוב. הפסדת."
+            
+            if win > 0: add_t(self.uid, win)
+            await i.response.edit_message(embed=discord.Embed(title="👑 תוצאות פוקר", description=f"היד הסופית: {self.cards}\n\n{msg}", color=0x00FF00 if win > 0 else 0xFF0000), view=self)
+            return False
+
+        # לחיצה על קלף כדי לסמן אותו כ-Hold
+        for idx in range(5):
+            if i.data.get('label', '').startswith(f"קלף {idx+1}"):
+                self.held[idx] = not self.held[idx]
+                self.children[idx].style = discord.ButtonStyle.success if self.held[idx] else discord.ButtonStyle.secondary
+                break
+        await i.response.edit_message(view=self)
+        return False
+
+# Roulette
+class RouletteView(View):
+    def __init__(self, bet, uid): super().__init__(timeout=60); self.bet=bet; self.uid=uid
+    async def spin(self, i, choice):
+        num = random.randint(0, 36)
+        color = "ירוק" if num == 0 else ("אדום" if num in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36] else "שחור")
+        win = (choice == color)
+        pay = self.bet * 14 if color == "ירוק" else self.bet * 2
+        if win: add_t(self.uid, pay)
+        for c in self.children: c.disabled = True
+        await i.response.edit_message(embed=discord.Embed(title=f"🎰 תוצאה: {num} ({color})", description=f"{'🎉 זכית ב-' + str(pay) if win else '❌ הפסדת ' + str(self.bet)} טוקנים.", color=0x00FF00 if win else 0xFF0000), view=self)
 
     @discord.ui.button(label="🔴 אדום (x2)", style=discord.ButtonStyle.danger)
-    async def red(self, interaction: discord.Interaction, b: Button): await self.play(interaction, "אדום")
+    async def r(self, i, b): await self.spin(i, "אדום")
     @discord.ui.button(label="⚫ שחור (x2)", style=discord.ButtonStyle.secondary)
-    async def black(self, interaction: discord.Interaction, b: Button): await self.play(interaction, "שחור")
+    async def bl(self, i, b): await self.spin(i, "שחור")
     @discord.ui.button(label="🟢 ירוק 0 (x14)", style=discord.ButtonStyle.success)
-    async def green(self, interaction: discord.Interaction, b: Button): await self.play(interaction, "ירוק")
+    async def gr(self, i, b): await self.spin(i, "ירוק")
 
 
-# --- משחק טאואר (Tower) ---
-class TowerModal(Modal):
-    def __init__(self):
-        super().__init__(title="🗼 טאואר - הימור")
-        self.bet_input = TextInput(label="כמות טוקנים להימור", placeholder="הכנס סכום...", required=True)
-        self.add_item(self.bet_input)
+# ==================== 6. PUBLIC LOBBY & SLASH COMMANDS ====================
 
-    async def on_submit(self, interaction: discord.Interaction):
-        try: bet = int(self.bet_input.value)
-        except ValueError: return
-        if not remove_tokens(interaction.user.id, bet):
-            await interaction.response.send_message("❌ אין לך מספיק טוקנים!", ephemeral=True)
-            return
+class LobbyView(View):
+    @discord.ui.button(label="🃏 בלאק ג'ק", style=discord.ButtonStyle.primary)
+    async def bj(self, i, b):
+        async def cb(inter, bet):
+            if rem_t(inter.user.id, bet):
+                dk = [2,3,4,5,6,7,8,9,10,10,10,10,11]*4; random.shuffle(dk)
+                v = BJView(bet, [dk.pop(), dk.pop()], [dk.pop(), dk.pop()], dk)
+                await inter.response.send_message(embed=v.emb(), view=v, ephemeral=True)
+            else: await inter.response.send_message("❌ אין מספיק טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("🃏 הימור בלאק ג'ק", cb))
 
-        tower_data = [random.randint(0, 2) for _ in range(5)]
-        embed = discord.Embed(title="🗼 מגדל הטאואר - קומה 1", description=f"הימור: **{bet}** טוקנים.\nבחר משבצת בטוחה כדי לטפס!", color=discord.Color.blue())
-        await interaction.response.send_message(embed=embed, view=TowerView(tower_data, 0, bet, interaction.user.id), ephemeral=True)
+    @discord.ui.button(label="💣 מיין (Mines)", style=discord.ButtonStyle.primary)
+    async def mn(self, i, b):
+        async def cb(inter, bet):
+            if rem_t(inter.user.id, bet):
+                await inter.response.send_message(embed=discord.Embed(title="💣 משחק מכרות התחיל! בהצלחה!"), view=MinesView(bet, 3, inter.user.id), ephemeral=True)
+            else: await inter.response.send_message("❌ אין מספיק טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("💣 הימור מכרות (3 פצצות)", cb))
 
-class TowerView(View):
-    multipliers = [1.3, 1.8, 2.5, 3.8, 5.5]
-    def __init__(self, tower_data, floor, bet, user_id):
-        super().__init__(timeout=90)
-        self.tower_data, self.floor, self.bet, self.user_id = tower_data, floor, bet, user_id
-        for i in range(3): self.add_item(TowerButton(i))
-        if self.floor > 0: self.add_item(TowerCashout())
+    @discord.ui.button(label="🗼 טאואר", style=discord.ButtonStyle.primary)
+    async def tw(self, i, b):
+        async def cb(inter, bet):
+            if rem_t(inter.user.id, bet):
+                await inter.response.send_message(embed=discord.Embed(title="🗼 קומה 1/5 - בחר דלת!"), view=TowerView(bet, inter.user.id), ephemeral=True)
+            else: await inter.response.send_message("❌ אין מספיק טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("🗼 הימור טאואר", cb))
 
-class TowerButton(Button):
-    def __init__(self, index):
-        super().__init__(label=f"❓ תא {index+1}", style=discord.ButtonStyle.primary)
-        self.index = index
+    @discord.ui.button(label="🎰 רולטה", style=discord.ButtonStyle.primary)
+    async def rl(self, i, b):
+        async def cb(inter, bet):
+            if rem_t(inter.user.id, bet):
+                await inter.response.send_message(embed=discord.Embed(title="🎰 בחר צבע ברולטה:"), view=RouletteView(bet, inter.user.id), ephemeral=True)
+            else: await inter.response.send_message("❌ אין מספיק טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("🎰 הימור רולטה", cb))
 
-    async def callback(self, interaction: discord.Interaction):
-        view: TowerView = self.view
-        if interaction.user.id != view.user_id: return
-
-        if self.index == view.tower_data[view.floor]:
-            embed = discord.Embed(title="💥 נפסלת! פגעת במלכודת!", description=f"הפסדת {view.bet} טוקנים.", color=discord.Color.red())
-            for child in view.children: child.disabled = True
-            await interaction.response.edit_message(embed=embed, view=view)
-            return
-
-        view.floor += 1
-        if view.floor == 5:
-            winnings = int(view.bet * 5.5)
-            add_tokens(view.user_id, winnings)
-            embed = discord.Embed(title="🏆 ניצחון מוחלט! כבשת את הטאואר!", description=f"זכית ב-**{winnings}** טוקנים!", color=discord.Color.gold())
-            for child in view.children: child.disabled = True
-            await interaction.response.edit_message(embed=embed, view=view)
-            return
-
-        embed = discord.Embed(title=f"🗼 מגדל הטאואר - קומה {view.floor + 1}", description=f"מכפיל נוכחי: **{view.multipliers[view.floor-1]}x**", color=discord.Color.blue())
-        await interaction.response.edit_message(embed=embed, view=TowerView(view.tower_data, view.floor, view.bet, view.user_id))
-
-class TowerCashout(Button):
-    def __init__(self): super().__init__(label="💰 משוך כסף", style=discord.ButtonStyle.gold, row=1)
-    async def callback(self, interaction: discord.Interaction):
-        view: TowerView = self.view
-        winnings = int(view.bet * view.multipliers[view.floor - 1])
-        add_tokens(view.user_id, winnings)
-        embed = discord.Embed(title="💰 פרשת בבטחה!", description=f"זכת ב-**{winnings}** טוקנים!", color=discord.Color.green())
-        for child in view.children: child.disabled = True
-        await interaction.response.edit_message(embed=embed, view=view)
-
-
-# --- משחק פוקר וידאו (Video Poker) ---
-class PokerModal(Modal):
-    def __init__(self):
-        super().__init__(title="👑 פוקר וידאו - הימור")
-        self.bet_input = TextInput(label="כמות טוקנים להימור", placeholder="הכנס סכום...", required=True)
-        self.add_item(self.bet_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try: bet = int(self.bet_input.value)
-        except ValueError: return
-        if not remove_tokens(interaction.user.id, bet):
-            await interaction.response.send_message("❌ אין לך מספיק טוקנים!", ephemeral=True)
-            return
-
-        suits, ranks = ['♥️', '♦️', '♣️', '♠️'], ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
-        deck = [f"{r}{s}" for r in ranks for s in suits]
-        random.shuffle(deck)
-        player_hand = [deck.pop() for _ in range(5)]
-
-        embed = discord.Embed(title="👑 שולחן הפוקר", description=f"היד שלך:\n`{ ' | '.join(player_hand) }` \n\nסמן קלפים שתרצה להחזיק ולחץ 'החלף קלפים':", color=discord.Color.gold())
-        await interaction.response.send_message(embed=embed, view=PokerView(player_hand, deck, bet, interaction.user.id), ephemeral=True)
-
-def evaluate_poker_hand(hand):
-    ranks = [card[:-2] for card in hand]
-    rank_values = {'2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'A':14}
-    values = sorted([rank_values[r] for r in ranks])
-    from collections import Counter
-    count_values = sorted(Counter(values).values(), reverse=True)
-    if count_values ==: return "רביעייה (Four of a Kind)", 10
-    if count_values ==: return "פול האוס (Full House)", 7
-    if count_values ==: return "שלשה (Three of a Kind)", 3
-    if count_values ==: return "זוגיים (Two Pair)", 2
-    return "ללא שילוב חזק", 0
-
-class PokerView(View):
-    def __init__(self, player_hand, deck, bet, user_id):
-        super().__init__(timeout=90)
-        self.player_hand, self.deck, self.bet, self.user_id = player_hand, deck, bet, user_id
-        self.holds = set()
-        for i in range(5): self.add_item(PokerHoldButton(i))
-        self.add_item(PokerDrawButton())
-
-class PokerHoldButton(Button):
-    def __init__(self, index):
-        super().__init__(label=f"קלף {index+1}", style=discord.ButtonStyle.secondary, row=0)
-        self.index = index
-    async def callback(self, interaction: discord.Interaction):
-        view: PokerView = self.view
-        if self.index in view.holds:
-            view.holds.remove(self.index)
-            self.style, self.label = discord.ButtonStyle.secondary, f"קלף {self.index+1}"
-        else:
-            view.holds.add(self.index)
-            self.style, self.label = discord.ButtonStyle.success, f"🔒 קלף {self.index+1}"
-        await interaction.response.edit_message(view=view)
-
-class PokerDrawButton(Button):
-    def __init__(self): super().__init__(label="🃏 החלף וסיים סיבוב", style=discord.ButtonStyle.primary, row=1)
-    async def callback(self, interaction: discord.Interaction):
-        view: PokerView = self.view
-        if interaction.user.id != view.user_id: return
-        final_hand = [view.player_hand[i] if i in view.holds else view.deck.pop() for i in range(5)]
-        name, mult = evaluate_poker_hand(final_hand)
-        winnings = int(view.bet * mult)
-        add_tokens(view.user_id, winnings)
-        
-        embed = discord.Embed(title="👑 תוצאות פוקר", description=f"היד הסופית:\n`{ ' | '.join(final_hand) }` \n\n📊 שילוב: {name}", color=discord.Color.green() if winnings > 0 else discord.Color.red())
-        embed.set_footer(text=f"זכת ב-{winnings} טוקנים!" if winnings > 0 else f"הפסדת {view.bet} טוקנים.")
-        for child in view.children: child.disabled = True
-        await interaction.response.edit_message(embed=embed, view=view)
-# ==================== 6. PUBLIC LOBBY VIEW & SLASH COMMANDS ====================
-
-class PublicGamesView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🃏 בלאק ג'ק", style=discord.ButtonStyle.primary, custom_id="lobby_bj")
-    async def bj(self, interaction: discord.Interaction, b: Button): 
-        await interaction.response.send_modal(BlackjackModal())
-
-    @discord.ui.button(label="🗼 טאואר", style=discord.ButtonStyle.primary, custom_id="lobby_tw")
-    async def tw(self, interaction: discord.Interaction, b: Button): 
-        await interaction.response.send_modal(TowerModal())
-
-    @discord.ui.button(label="💣 מיין (Mines)", style=discord.ButtonStyle.primary, custom_id="lobby_mn")
-    async def mn(self, interaction: discord.Interaction, b: Button): 
-        await interaction.response.send_modal(MinesModal())
-
-    @discord.ui.button(label="🎰 רולטה", style=discord.ButtonStyle.primary, custom_id="lobby_rl")
-    async def rl(self, interaction: discord.Interaction, b: Button): 
-        await interaction.response.send_modal(RouletteModal())
-
-    @discord.ui.button(label="👑 פוקר", style=discord.ButtonStyle.primary, custom_id="lobby_pk")
-    async def pk(self, interaction: discord.Interaction, b: Button): 
-        await interaction.response.send_modal(PokerModal())
+    @discord.ui.button(label="👑 פוקר", style=discord.ButtonStyle.primary)
+    async def pk(self, i, b):
+        async def cb(inter, bet):
+            if rem_t(inter.user.id, bet):
+                dk = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"]*4
+                v = PokerView(bet, [random.choice(dk) for _ in range(5)], inter.user.id)
+                await inter.response.send_message(embed=discord.Embed(title="👑 סמן קלפים לנעילה ולחץ Draw:"), view=v, ephemeral=True)
+            else: await inter.response.send_message("❌ אין מספיק טוקנים!", ephemeral=True)
+        await i.response.send_modal(BetModal("👑 הימור פוקר וידאו", cb))
 
 
 # --- פקודות סלאש ---
 
 @bot.tree.command(name="פאנל_אזולאי", description="לוח בקרה סודי ומורחב רק בשבילך")
-async def panel_azoulai(interaction: discord.Interaction):
-    if not await security_check(interaction): return
-    embed = discord.Embed(title="👑 פאנל אזולאי - Ticket Royale", description="מערכת ניהול בלעדית:", color=discord.Color.gold())
-    await interaction.response.send_message(embed=embed, view=AzoulaiAdminView(), ephemeral=True)
+async def p_az(i: discord.Interaction):
+    if await sec_check(i): await i.response.send_message(embed=discord.Embed(title="👑 פאנל אזולאי", description="לוח השליטה הבלעדי שלך:"), view=AdminView(), ephemeral=True)
 
 @bot.tree.command(name="פאנל", description="הצגת לוח משחקי הקזינו לחברי השרת")
-async def panel_public(interaction: discord.Interaction):
-    if not await security_check(interaction): return
-    embed = discord.Embed(
-        title="🎰 קזינו Ticket Royale - פאנל משחקים", 
-        description="כל המשחקים פעילים! לחצו למטה כדי להמר ולשחק:", 
-        color=discord.Color.purple()
-    )
-    await interaction.response.send_message(embed=embed, view=PublicGamesView(), ephemeral=False)
+async def p_pub(i: discord.Interaction):
+    if await sec_check(i): await i.response.send_message(embed=discord.Embed(title="🎰 קזינו Ticket Royale", description="לוח המשחקים פעיל! לחצו כדי להמר ולשחק:"), view=LobbyView(), ephemeral=False)
 
 @bot.tree.command(name="דיילי", description="קבל 20 טוקנים חינם בכל 24 שעות")
-async def daily(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    now = datetime.now()
-    
-    if user_id in daily_cooldown:
-        next_claim = daily_cooldown[user_id] + timedelta(hours=24)
-        if now < next_claim:
-            time_left = next_claim - now
-            hours, remainder = divmod(time_left.seconds, 3600)
-            minutes, _ = divmod(remainder, 60)
-            await interaction.response.send_message(f"❌ כבר אספת את הדיילי שלך היום! תוכל לאסוף שוב בעוד {hours} שעות ו-{minutes} דקות.", ephemeral=True)
-            return
-
-    add_tokens(user_id, 20)
-    daily_cooldown[user_id] = now
-    await interaction.response.send_message(f"🪙 קיבלת **20 טוקנים**! המאזן הנוכחי שלך: **{get_tokens(user_id)}** טוקנים.")
+async def dly(i: discord.Interaction):
+    uid = i.user.id; now = datetime.now()
+    if uid in daily_cooldown and now < daily_cooldown[uid] + timedelta(hours=24):
+        tl = (daily_cooldown[uid] + timedelta(hours=24)) - now
+        h, rem = divmod(tl.seconds, 3600); m, _ = divmod(rem, 60)
+        await i.response.send_message(f"❌ חזור בעוד {h} שעות ו-{m} דקות.", ephemeral=True); return
+    add_t(uid, 20); daily_cooldown[uid] = now
+    await i.response.send_message(f"🪙 קיבלת 20 טוקנים! מאזן נוכחי: {get_t(uid)}")
 
 
-# ==================== 7. BOT BOT STARTUP BLOCK ====================
+# ==================== 7. STARTUP BLOCK ====================
 
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print(f"הבוט מחובר בהצלחה בתור {bot.user}")
+    print(f"Casino Bot is Online as {bot.user}")
 
-# הפעלת שרת ה-Keep Alive עבור UptimeRobot
 keep_alive()
-
 TOKEN = os.getenv('DISCORD_TOKEN')
-if TOKEN:
-    bot.run(TOKEN)
-else:
-    # אם אתה מריץ מקומית, הדבק את הטוקן בתוך הגרשיים
-    bot.run("הטוקן_הסודי_שלך_כאן")
+if TOKEN: bot.run(TOKEN)
+else: bot.run("הטוקן_הסודי_שלך_כאן")
