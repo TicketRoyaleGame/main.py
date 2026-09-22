@@ -1,4 +1,3 @@
-import os
 import discord
 from discord.ext import commands
 
@@ -24,12 +23,8 @@ class AdminGamePanel(discord.ui.View):
 
 @bot.tree.command(name="פאנל", description="פאנל ניהול בלעדי למנהל")
 async def panel(interaction: discord.Interaction):
-    # בדיקה האם המשתמש שהריץ את הפקודה הוא אתה
     if interaction.user.id != YOUR_DISCORD_ID:
-        # הודעה נסתרת שרואה רק מי שנסה להיכנס
         await interaction.response.send_message("אתה לא רשאי לפאנל זה!", ephemeral=True)
-        
-        # שליחת הודעה פרטית (DM) אליך עם פרטי המשתמש המנסה
         try:
             owner = await bot.fetch_user(YOUR_DISCORD_ID)
             embed_alert = discord.Embed(
@@ -40,20 +35,17 @@ async def panel(interaction: discord.Interaction):
             embed_alert.add_field(name="שם משתמש", value=str(interaction.user), inline=False)
             embed_alert.add_field(name="מזהה (ID)", value=str(interaction.user.id), inline=False)
             embed_alert.add_field(name="שרת", value=interaction.guild.name if interaction.guild else "הודעה פרטית", inline=False)
-            
             await owner.send(embed=embed_alert)
         except Exception as e:
             print(f"שגיאה בשליחת הודעה פרטית אליך: {e}")
         return
 
-    # אם זה אתה - הפאנל נפתח בהצלחה!
     embed = discord.Embed(
         title="👑 פאנל ניהול ראשי - Ticket Royale",
         description="ברוך הבא למערכת הניהול שלך. בחר באחת מהאפשרויות:",
         color=discord.Color.gold()
     )
     embed.set_footer(text="מחובר כמנהל מערכת ראשי")
-    
     await interaction.response.send_message(embed=embed, view=AdminGamePanel(), ephemeral=True)
 
 @bot.event
@@ -61,11 +53,5 @@ async def on_ready():
     await bot.tree.sync()
     print(f"הבוט מחובר בהצלחה בתור {bot.user}")
 
-# משיכת הטוקן המאובטח מהשרת (מה-KEY שהגדרנו ב-Render)
-TOKEN = os.getenv('DISCORD_TOKEN')
-
-# הרצת הבוט
-if TOKEN:
-    bot.run(TOKEN)
-else:
-    print("MTU1MjA3NTQyMjI5OTIwMTU2Ng.GZ45Zo.gYxl-WVJhkwWFf_gxSzlpsR_hMEtwelhDROXWM")
+# הרצת הבוט עם הטוקן החדש שתשים כאן (אחרי איפוס)
+bot.run("הדבק_כאן_את_הטוקן_החדש_אחרי_איפוס")
