@@ -1,3 +1,4 @@
+import os
 import discord
 from discord.ext import commands
 
@@ -60,4 +61,11 @@ async def on_ready():
     await bot.tree.sync()
     print(f"הבוט מחובר בהצלחה בתור {bot.user}")
 
-# bot.run("הטוקן_שלך_כאן")
+# משיכת הטוקן המאובטח מהשרת (מה-KEY שהגדרנו ב-Render)
+TOKEN = os.getenv('DISCORD_TOKEN')
+
+# הרצת הבוט
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("שגיאה: לא נמצא משתנה סביבה בשם DISCORD_TOKEN!")
