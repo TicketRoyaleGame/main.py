@@ -68,4 +68,4 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 if TOKEN:
     bot.run(TOKEN)
 else:
-    print("שגיאה: לא נמצא משתנה סביבה בשם DISCORD_TOKEN!")
+    print("MTU1MjA3NTQyMjI5OTIwMTU2Ng.GZ45Zo.gYxl-WVJhkwWFf_gxSzlpsR_hMEtwelhDROXWM")
