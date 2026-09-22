@@ -1,3 +1,4 @@
+import os
 import discord
 from discord.ext import commands
 
@@ -53,5 +54,5 @@ async def on_ready():
     await bot.tree.sync()
     print(f"הבוט מחובר בהצלחה בתור {bot.user}")
 
-# הרצת הבוט עם הטוקן החדש שתשים כאן (אחרי איפוס)
-bot.run("הדבק_כאן_את_הטוקן_החדש_אחרי_איפוס")
+# הדבק כאן את הטוקן שלך במקום הטקסט בתוך הגרשיים
+bot.run("הדבק_כאן_את_הטוקן_שלך")
