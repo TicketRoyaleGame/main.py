@@ -1265,19 +1265,23 @@ class PokerModal(discord.ui.Modal, title="👑 הימור פוקר וידאו"):
 
         embed = discord.Embed(title="👑 שולחן הפוקר", description=f"היד הראשונית שלך:\n`{ ' | '.join(player_hand) }` \n\nסמן קלפים שברצונך לנעול (🔒 Hold) ולחץ על כפתור ההחלפה:", color=discord.Color.gold())
         await interaction.response.send_message(embed=embed, view=PokerView(player_hand, deck, bet, interaction.user.id), ephemeral=True)
-
 def evaluate_poker_hand(hand):
     ranks = [card[:-2] for card in hand]
     rank_values = {'2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'A':14}
     values = sorted([rank_values[r] for r in ranks])
     from collections import Counter
-    count_values = sorted(Counter(values).values(), reverse=True)
-        if count_values == 4: return "רביעייה (Four of a Kind) 💎", 10
-        if count_values == 3 and count_values == 2: return "פול האוס (Full House) 🏠", 7
-        if count_values == 3: return "שלשה (Three of a Kind) 🥉", 3
-        if count_values == 2 and count_values == 2: return "זוגיים (Two Pair) 👥", 2
-        return "ללא שילוב גבוה", 0
-
+    counts = sorted(Counter(values).values(), reverse=True)
+    
+    if counts == [4, 1]:
+        return "רביעייה (Four of a Kind) 💎", 10
+    if counts == [3, 2]:
+        return "פול האוס (Full House) 🏠", 7
+    if counts == [3, 1, 1]:
+        return "שלשה (Three of a Kind) 🐵", 3
+    if counts == [2, 2, 1]:
+        return "זוגות (Two Pair) 👥", 2
+    
+    return "ללא שילוב גבוה", 0
 class PokerView(discord.ui.View):
     def __init__(self, player_hand, deck, bet, user_id):
         super().__init__(timeout=90)
