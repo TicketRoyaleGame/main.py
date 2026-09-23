@@ -1191,43 +1191,60 @@ class BlackjackActionButton(discord.ui.Button):
             )
             await interaction.edit_original_response(embed=embed, view=BlackjackView(game))
 # ==========================================
-# 💣 משחק Mines (בנפרד)
+# 💣 מערכת משחק Mines מלאה ומתוקנת
 # ==========================================
 
+import discord
+import random
+
+# 1. חלון ההגדרות (Modal) שנפתח בלחיצה על כפתור ה-Mines
 class MinesSetupModal(discord.ui.Modal, title="💣 הגדרת משחק Mines"):
     def __init__(self):
         super().__init__()
-        self.bet_input = discord.ui.TextInput(label="כמות טיקטים להימור", placeholder="הכנס סכום...", required=True)
-        self.size_input = discord.ui.TextInput(label="גודל לוח (3, 4, 5, 6, 7 או 8)", placeholder="לדוגמה: 5 (עבור 5x5)", required=True, max_length=1)
-        self.mines_input = discord.ui.TextInput(label="כמות פצצות", placeholder="כמות פצצות בהתאם לגודל הלוח", required=True, max_length=2)
+        self.bet_input = discord.ui.TextInput(
+            label="כמות טיקטים להימור", 
+            placeholder="הכנס סכום...", 
+            required=True
+        )
+        self.size_input = discord.ui.TextInput(
+            label="גודל לוח (3, 4, 5, 6, 7 או 8)", 
+            placeholder="לדוגמה: 5 (עבור 5x5)", 
+            required=True, 
+            max_length=1
+        )
+        self.mines_input = discord.ui.TextInput(
+            label="כמות פצצות", 
+            placeholder="כמות פצצות בהתאם לגודל הלוח", 
+            required=True, 
+            max_length=2
+        )
         
         self.add_item(self.bet_input)
         self.add_item(self.size_input)
         self.add_item(self.mines_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
+        # בדיקות תקינות קלט
         try:
             bet = int(self.bet_input.value)
             grid_size = int(self.size_input.value)
             bombs_count = int(self.mines_input.value)
         except ValueError:
-            return await interaction.followup.send("❌ אנא הכנס מספרים תקינים בלבד!", ephemeral=True)
+            return await interaction.response.send_message("❌ אנא הכנס מספרים תקינים בלבד!", ephemeral=True)
 
         if grid_size not in [3, 4, 5, 6, 7, 8]:
-            return await interaction.followup.send("❌ גודל הלוח חייב להיות אחד מהבאים בלבד: 3, 4, 5, 6, 7 או 8!", ephemeral=True)
+            return await interaction.response.send_message("❌ גודל הלוח חייב להיות אחד מהבאים בלבד: 3, 4, 5, 6, 7 או 8!", ephemeral=True)
 
         total_tiles = grid_size * grid_size
         if not (1 <= bombs_count < total_tiles):
-            return await interaction.followup.send(f"❌ כמות הפצצות חייבת להיות בין 1 ל-{total_tiles - 1} בלוח בגודל {grid_size}x{grid_size}!", ephemeral=True)
+            return await interaction.response.send_message(f"❌ כמות הפצצות חייבת להיות בין 1 ל-{total_tiles - 1} בלוח בגודל {grid_size}x{grid_size}!", ephemeral=True)
 
         u = get_user_data(interaction.user.id)
         if u["tickets"] < bet or bet <= 0:
-            return await interaction.followup.send("❌ אין לך מספיק טיקטים להימור זה!", ephemeral=True)
+            return await interaction.response.send_message("❌ אין לך מספיק טיקטים להימור זה!", ephemeral=True)
 
+        # הורדת הטיקטים ויצירת המיקומים של הפצצות
         update_tickets(interaction.user.id, -bet)
-
         bomb_positions = random.sample(range(total_tiles), bombs_count)
 
         embed = discord.Embed(
@@ -1241,12 +1258,24 @@ class MinesSetupModal(discord.ui.Modal, title="💣 הגדרת משחק Mines"):
             ),
             color=discord.Color.dark_embed()
         )
-        await interaction.followup.send(
+        await interaction.response.send_message(
             embed=embed, 
             view=MinesDynamicView(bet, grid_size, bombs_count, bomb_positions, interaction.user.id), 
             ephemeral=True
         )
 
+
+# 2. כפתור שמוסיפים לתפריד המשחקים הראשי שלך כדי לפתוח את ה-Modal בלי שגיאות
+class OpenMinesModalButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="💣 מיין (Mines)", style=discord.ButtonStyle.danger)
+
+    async def callback(self, interaction: discord.Interaction):
+        # שולח את ה-Modal מיד ובצורה ישירה למניעת Timeout
+        await interaction.response.send_modal(MinesSetupModal())
+
+
+# 3. הלוח הדינמי של המשחק (כפתורים ומשבצות)
 class MinesDynamicView(discord.ui.View):
     def __init__(self, bet, grid_size, bombs_count, bomb_positions, user_id, revealed=None, game_over=False):
         super().__init__(timeout=180)
@@ -1279,6 +1308,7 @@ class MinesDynamicView(discord.ui.View):
         if not self.game_over and len(self.revealed) > 0:
             self.add_item(MinesDynamicCashOut(row=grid_size - 1 if grid_size < 5 else 4))
 
+
 class MinesDynamicButton(discord.ui.Button):
     def __init__(self, index, label, style, disabled, row):
         super().__init__(label=label, style=style, disabled=disabled, row=row)
@@ -1292,6 +1322,7 @@ class MinesDynamicButton(discord.ui.Button):
 
         total_tiles = view.grid_size * view.grid_size
 
+        # פגיעה במוקש - הפסד
         if self.index in view.bomb_positions:
             view.game_over = True
             embed = discord.Embed(
@@ -1309,6 +1340,7 @@ class MinesDynamicButton(discord.ui.Button):
         multiplier = round(1.0 + (safe_picked * 0.20 * (view.bombs_count / 3 + 1)), 2)
         potential_win = int(view.bet * multiplier)
 
+        # ניצחון (פתיחת כל המשבצות הבטוחות)
         if safe_picked == (total_tiles - view.bombs_count):
             update_tickets(view.user_id, potential_win)
             embed = discord.Embed(
@@ -1331,6 +1363,7 @@ class MinesDynamicButton(discord.ui.Button):
         )
         new_view = MinesDynamicView(view.bet, view.grid_size, view.bombs_count, view.bomb_positions, view.user_id, view.revealed, game_over=False)
         await interaction.edit_original_response(embed=embed, view=new_view)
+
 
 class MinesDynamicCashOut(discord.ui.Button):
     def __init__(self, row):
@@ -1747,46 +1780,46 @@ async def daily(interaction: discord.Interaction):
     save_data(data)
     await interaction.response.send_message(f"🪙 קיבלת **20 טיקטים** חינם! המאזן שלך: **{get_user_data(user_id)['tickets']}** טיקטים.")
 # ==========================================
-# 🎟️ מערכת קופונים ופקודת Drop
+# 🎟️ סיסטעם פון קופאנס און דראפ (Drop)
 # ==========================================
 
 COUPONS = {} # מבנה: {"CODE": {"amount": 100, "used_by": []}}
 OWNER_ID = 1260675229626273802
 
-@app_commands.command(name="יצירת_קוד_קופון", description="יצירת קוד קופון חדש (למנהל בלבד)")
-@app_commands.describe(code="קוד הקופון", amount="כמות הטיקטים")
+@app_commands.command(name="יצירת_קוד_קופון", description="שאפן א נייעם קופאן-קאוד (נאר פארן אדמיניסטראטאר)")
+@app_commands.describe(code="דער קופאן-קאוד", amount="די צאָל טיקעטן")
 async def create_coupon(interaction: discord.Interaction, code: str, amount: int):
     if interaction.user.id != OWNER_ID:
-        return await interaction.response.send_message("❌ רק בעל הבוט יכול לייצר קודי קופון!", ephemeral=True)
+        return await interaction.response.send_message("❌ נאר דער באזיצער פונעם באט קען שאפן קופאן-קאודס!", ephemeral=True)
     
     COUPONS[code.upper()] = {"amount": amount, "used_by": []}
-    await interaction.response.send_message(f"✅ קופון `{code.upper()}` בשווי **{amount}** טיקטים נוצר בהצלחה!", ephemeral=True)
+    await interaction.response.send_message(f"✅ דער קופאן `{code.upper()}` מיט **{amount}** טיקעטן איז ערפאלגרייך געשאפן געווארן!", ephemeral=True)
 
-@app_commands.command(name="קוד_קופון", description="מימוש קוד קופון לקבלת טיקטים")
-@app_commands.describe(code="הכנס את קוד הקופון")
+@app_commands.command(name="קוד_קופון", description="באנוצן זיך מיט א קופאן-קאוד צו באקומען טיקעטן")
+@app_commands.describe(code="אריינלייגן דעם קופאן-קאוד")
 async def redeem_coupon(interaction: discord.Interaction, code: str):
     code_upper = code.upper()
     if code_upper not in COUPONS:
-        return await interaction.response.send_message("❌ קוד הקופון אינו קיים או שפג תוקפו.", ephemeral=True)
+        return await interaction.response.send_message("❌ דער קופאן-קאוד עקזיסטירט נישט אדער ער האט שוין פארלוירן זיין תוקף.", ephemeral=True)
     
     coupon = COUPONS[code_upper]
     if interaction.user.id in coupon["used_by"]:
-        return await interaction.response.send_message("❌ כבר מימשת את הקופון הזה בעבר!", ephemeral=True)
+        return await interaction.response.send_message("❌ איר האט שוין באנוצט דעם קופאן אין דער פארגאנגענהייט!", ephemeral=True)
 
     coupon["used_by"].append(interaction.user.id)
     update_tickets(interaction.user.id, coupon["amount"])
     
-    await interaction.response.send_message(f"🎉 כל הכבוד! מימשת בהצלחה את הקופון וקיבלת **{coupon['amount']}** טיקטים!", ephemeral=True)
+    await interaction.response.send_message(f"🎉 א גרויסן יישר כוח! איר האט ערפאלגרייך באנוצט דעם קופאן און באקומען **{coupon['amount']}** טיקעטן!", ephemeral=True)
 
-@app_commands.command(name="drop", description="פיזור טיקטים בחדר (למנהל בלבד)")
-@app_commands.describe(amount="כמות הטיקטים ב-Drop")
+@app_commands.command(name="drop", description="צעשפרייטן טיקעטן אינעם צימער (נאר פארן אדמיניסטראטאר)")
+@app_commands.describe(amount="די צאָל טיקעטן אינעם דראפ")
 async def drop_tickets(interaction: discord.Interaction, amount: int):
     if interaction.user.id != OWNER_ID:
-        return await interaction.response.send_message("❌ רק בעל הבוט יכול לבצע Drop!", ephemeral=True)
+        return await interaction.response.send_message("❌ נאר דער באזיצער פונעם באט קען מאכן א דראפ!", ephemeral=True)
 
     embed = discord.Embed(
-        title="🎁 Drop טיקטים חדש!",
-        description=f"מישהו פזר כאן **{amount}** טיקטים!\nלחץ על הכפתור למטה כדי לאסוף אותם ראשון!",
+        title="🎁 א נייע טיקעטן-דראפ!",
+        description=f"עמיצער האט דא צעשפרייט **{amount}** טיקעטן!\nדריקט אויף דעם קנעפל אונטן צו זיי כאפן ערשטער!",
         color=discord.Color.gold()
     )
     await interaction.response.send_message(embed=embed, view=DropView(amount))
@@ -1797,10 +1830,10 @@ class DropView(discord.ui.View):
         self.amount = amount
         self.claimed = False
 
-    @discord.ui.button(label="אסוף טיקטים 💰", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="כאפּ טיקעטן 💰", style=discord.ButtonStyle.success)
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.claimed:
-            return await interaction.response.send_message("❌ הטיקטים כבר נאספו על ידי מישהו אחר!", ephemeral=True)
+            return await interaction.response.send_message("❌ די טיקעטן זענען שוין צוגענומען געווארן דורך עמיצער אנדערש!", ephemeral=True)
         
         self.claimed = True
         update_tickets(interaction.user.id, self.amount)
@@ -1809,7 +1842,7 @@ class DropView(discord.ui.View):
             child.disabled = True
 
         embed = interaction.message.embeds[0]
-        embed.description = f"🎁 ה-Drop נאסף בהצלחה על ידי {interaction.user.mention}! זכה ב-**{self.amount}** טיקטים."
+        embed.description = f"🎁 דער דראפ איז ערפאלגרייך צוגענומען געווארן דורך {interaction.user.mention}! ער האט געווינען **{self.amount}** טיקעטן."
         embed.color = discord.Color.dark_gray()
         
         await interaction.response.edit_message(embed=embed, view=self)
