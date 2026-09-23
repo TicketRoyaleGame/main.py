@@ -1272,10 +1272,10 @@ def evaluate_poker_hand(hand):
     values = sorted([rank_values[r] for r in ranks])
     from collections import Counter
     count_values = sorted(Counter(values).values(), reverse=True)
-           if count_values[0] == 4: return "רביעייה (Four of a Kind) 💎", 10
-        if count_values[0] == 3 and count_values[1] == 2: return "פול האוס (Full House) 🏠", 7
-        if count_values[0] == 3: return "שלשה (Three of a Kind) 🥉", 3
-        if count_values[0] == 2 and count_values[1] == 2: return "זוגיים (Two Pair) 👥", 2
+        if count_values == 4: return "רביעייה (Four of a Kind) 💎", 10
+        if count_values == 3 and count_values == 2: return "פול האוס (Full House) 🏠", 7
+        if count_values == 3: return "שלשה (Three of a Kind) 🥉", 3
+        if count_values == 2 and count_values == 2: return "זוגיים (Two Pair) 👥", 2
 
     return "ללא שילוב גבוה", 0
 
