@@ -1446,4 +1446,4 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 if TOKEN:
     bot.run(TOKEN)
 else:
-    bot.run("הטוקן_הסודי_שלך_כאן")
+    bot.run("MTU1MjA3NTQyMjI5OTIwMTU2Ng.GvMTSU.GHHvIbhn3jYLM7rrNVYQumdLJdnUe9jPCoHsos")
