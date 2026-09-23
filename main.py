@@ -1037,87 +1037,176 @@ class BlackjackView(discord.ui.View):
             msg = f"❌ הפסדת {self.bet} טיקטים."
         await interaction.response.edit_message(content=msg, embed=self.create_embed(interaction.user, True), view=self)
 # ==========================================
-#         💣 משחק 2: מכרות (Mines)
+# 💣 משחק מוקשים (Mines Game)
 # ==========================================
 
 class MinesModal(discord.ui.Modal, title="💣 משחק מכרות (Mines)"):
     def __init__(self):
         super().__init__()
         self.bet_input = discord.ui.TextInput(label="כמות טיקטים להימור", placeholder="הכנס סכום...", required=True)
-        self.bombs_input = discord.ui.TextInput(label="כמות פצצות (1-24)", placeholder="הכנס מספר פצצות...", required=True)
+        self.mines_input = discord.ui.TextInput(label="כמות פצצות (1-24)", placeholder="3", required=True, max_length=2)
         self.add_item(self.bet_input)
-        self.add_item(self.bombs_input)
+        self.add_item(self.mines_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         if is_user_banned(interaction.user.id): return
         try:
             bet = int(self.bet_input.value)
-            bombs = int(self.bombs_input.value)
-        except ValueError: return
-        if bombs < 1 or bombs > 24: return
-        
+            bombs_count = int(self.mines_input.value)
+        except ValueError:
+            return await interaction.response.send_message("אנא הכנס מספרים תקינים בלבד!", ephemeral=True)
+
         u = get_user_data(interaction.user.id)
-        if u["tickets"] < bet or bet <= 0: return
+        if u["tickets"] < bet or bet <= 0:
+            return await interaction.response.send_message("אין לך מספיק טיקטים להימור זה!", ephemeral=True)
+        if not (1 <= bombs_count <= 24):
+            return await interaction.response.send_message("כמות הפצצות חייבת להיות בין 1 ל-24!", ephemeral=True)
 
         update_tickets(interaction.user.id, -bet)
-        grid = [0] * 25
-        for pos in random.sample(range(25), bombs): grid[pos] = 1
 
-        view = MinesView(bet, bombs, grid, interaction.user.id)
-        await interaction.response.send_message(embed=view.create_embed(), view=view, ephemeral=True)
+        # בחירת מיקומי הפצצות באקראי מתוך 25 המשבצות (0 עד 24)
+        bomb_positions = random.sample(range(25), bombs_count)
 
-class MinesTileButton(discord.ui.Button):
-    def __init__(self, index: int):
-        super().__init__(label="❓", style=discord.ButtonStyle.secondary, row=index // 5)
+        embed = discord.Embed(
+            title="🎲 Mines Game",
+            description=(
+                f"**הימור:** {bet} טיקטים\n"
+                f"**פצצות:** {bombs_count}\n"
+                f"**מכפיל:** x1.00\n"
+                f"**נשארו לבחירה:** {25 - bombs_count}\n"
+                f"**סטטוס:** בחר משבצת ❓"
+            ),
+            color=discord.Color.dark_embed()
+        )
+        await interaction.response.send_message(
+            embed=embed, 
+            view=MinesView(bet, bombs_count, bomb_positions, interaction.user.id), 
+            ephemeral=True
+        )
+
+class MinesView(discord.ui.View):
+    def __init__(self, bet, bombs_count, bomb_positions, user_id, revealed=None, game_over=False):
+        super().__init__(timeout=180)
+        self.bet = bet
+        self.bombs_count = bombs_count
+        self.bomb_positions = bomb_positions
+        self.user_id = user_id
+        self.revealed = revealed if revealed else set()
+        self.game_over = game_over
+
+        # יצירת לוח של 25 כפתורים (5 שורות של 5)
+        for i in range(25):
+            row_num = i // 5
+            if self.game_over:
+                if i in self.bomb_positions:
+                    label, style, disabled = "💣", discord.ButtonStyle.danger, True
+                elif i in self.revealed:
+                    label, style, disabled = "💎", discord.ButtonStyle.success, True
+                else:
+                    label, style, disabled = "❓", discord.ButtonStyle.secondary, True
+            else:
+                if i in self.revealed:
+                    label, style, disabled = "💎", discord.ButtonStyle.success, True
+                else:
+                    label, style, disabled = "❓", discord.ButtonStyle.secondary, False
+
+            self.add_item(MinesButton(i, label, style, disabled, row=row_num))
+
+        # הוספת כפתור Cash Out בשורה האחרונה (שורה 5)
+        if not self.game_over and len(self.revealed) > 0:
+            self.add_item(MinesCashOut(row=4))
+
+class MinesButton(discord.ui.Button):
+    def __init__(self, index, label, style, disabled, row):
+        super().__init__(label=label, style=style, disabled=disabled, row=row)
         self.index = index
 
     async def callback(self, interaction: discord.Interaction):
         view: MinesView = self.view
-        if interaction.user.id != view.user_id or self.label != "❓": return
+        if interaction.user.id != view.user_id:
+            return await interaction.response.send_message("זה לא המשחק שלך!", ephemeral=True)
 
-        if view.grid[self.index] == 1:
-            self.label, self.style = "💥", discord.ButtonStyle.danger
-            view.reveal_all()
-            for child in view.children: child.disabled = True
-            await interaction.response.edit_message(embed=discord.Embed(title="💥 בום! פגעת בפצצה!", description=f"הפסדת **{view.bet}** טיקטים.", color=discord.Color.red()), view=view)
-            return
+        # בדיקה אם פגע בפצצה
+        if self.index in view.bomb_positions:
+            view.game_over = True
+            embed = discord.Embed(
+                title="🎲 Mines Game",
+                description=(
+                    f"**הימור:** {view.bet} טיקטים\n"
+                    f"**פצצות:** {view.bombs_count}\n"
+                    f"**סטטוס:** 💥 פגעת במוקש והפסדת את ההימור!"
+                ),
+                color=discord.Color.red()
+            )
+            new_view = MinesView(view.bet, view.bombs_count, view.bomb_positions, view.user_id, view.revealed, game_over=True)
+            return await interaction.response.edit_message(embed=embed, view=new_view)
 
-        self.label, self.style = "💎", discord.ButtonStyle.success
-        view.diamonds += 1
-        mult = 1.0
-        for i in range(view.diamonds): mult *= (25 - i) / (25 - view.bombs - i)
-        view.current_multiplier = round(mult, 2)
-        await interaction.response.edit_message(embed=view.create_embed(), view=view)
+        # פגע ביהלום בטוח
+        if self.index not in view.revealed:
+            view.revealed.add(user_index := self.index) # הוספה לרשימת הנחשפים
 
-class MinesView(discord.ui.View):
-    def __init__(self, bet, bombs, grid, user_id):
-        super().__init__(timeout=180)
-        self.bet, self.bombs, self.grid, self.user_id, self.diamonds, self.current_multiplier = bet, bombs, grid, user_id, 0, 1.0
-        for i in range(25): self.add_item(MinesTileButton(i))
-        self.add_item(MinesCashoutButton())
+        # חישוב מכפיל לפי כמות הלחיצות (נוסחת קזינו פופולרית למיינס)
+        safe_picked = len(view.revealed)
+        multiplier = round(1.0 + (safe_picked * 0.25 * (view.bombs_count / 5 + 1)), 2)
+        potential_win = int(view.bet * multiplier)
 
-    def create_embed(self):
-        embed = discord.Embed(title="💣 קזינו Ticket Royale - מכרות", color=discord.Color.purple())
-        embed.add_field(name="💰 הימור", value=f"{self.bet} טיקטים", inline=True)
-        embed.add_field(name="📈 מכפיל נוכחי", value=f"**{self.current_multiplier}x**", inline=False)
-        return embed
+        # בדיקה אם ניצח (פתח את כל המשבצות הבטוחות)
+        if safe_picked == (25 - view.bombs_count):
+            update_tickets(view.user_id, potential_win)
+            embed = discord.Embed(
+                title="🎲 Mines Game",
+                description=(
+                    f"**הימור:** {view.bet} טיקטים\n"
+                    f"**מכפיל סופי:** x{multiplier}\n"
+                    f"**זכייה:** 🏆 סך הכל זכית ב-**{potential_win}** טיקטים!"
+                ),
+                color=discord.Color.gold()
+            )
+            new_view = MinesView(view.bet, view.bombs_count, view.bomb_positions, view.user_id, view.revealed, game_over=True)
+            return await interaction.response.edit_message(embed=embed, view=new_view)
 
-    def reveal_all(self):
-        for child in self.children:
-            if isinstance(child, MinesTileButton):
-                child.label = "💣" if self.grid[child.index] == 1 else "💎"
-                child.style = discord.ButtonStyle.danger if self.grid[child.index] == 1 else discord.ButtonStyle.secondary
+        embed = discord.Embed(
+            title="🎲 Mines Game",
+            description=(
+                f"**הימור:** {view.bet} טיקטים\n"
+                f"**פצצות:** {view.bombs_count}\n"
+                f"**מכפיל:** x{multiplier}\n"
+                f"**נשארו לבחירה:** {25 - view.bombs_count - safe_picked}\n"
+                f"**זכייה פוטנציאלית:** {potential_win} טיקטים\n"
+                f"**סטטוס:** בחר משבצת נוספת 💎"
+            ),
+            color=discord.Color.green()
+        )
+        new_view = MinesView(view.bet, view.bombs_count, view.bomb_positions, view.user_id, view.revealed, game_over=False)
+        await interaction.response.edit_message(embed=embed, view=new_view)
 
-class MinesCashoutButton(discord.ui.Button):
-    def __init__(self): super().__init__(label="💰 משוך כסף", style=discord.ButtonStyle.gold, row=4)
+class MinesCashOut(discord.ui.Button):
+    def __init__(self, row):
+        super().__init__(label="💰 Cash Out", style=discord.ButtonStyle.success, row=row)
+
     async def callback(self, interaction: discord.Interaction):
         view: MinesView = self.view
-        if interaction.user.id != view.user_id or view.diamonds == 0: return
-        winnings = int(view.bet * view.current_multiplier)
+        if interaction.user.id != view.user_id:
+            return await interaction.response.send_message("זה לא המשחק שלך!", ephemeral=True)
+
+        safe_picked = len(view.revealed)
+        multiplier = round(1.0 + (safe_picked * 0.25 * (view.bombs_count / 5 + 1)), 2)
+        winnings = int(view.bet * multiplier)
+
         update_tickets(view.user_id, winnings)
-        view.reveal_all()
-        for child in view.children: child.disabled = True
-        await interaction.response.edit_message(embed=discord.Embed(title="💰 משיכת כסף מוצלחת!", description=f"זכת ב-**{winnings}** טיקטים.", color=discord.Color.green()), view=view)
+        view.game_over = True
+
+        embed = discord.Embed(
+            title="🎲 Mines Game",
+            description=(
+                f"**הימור:** {view.bet} טיקטים\n"
+                f"**מכפיל משיכה:** x{multiplier}\n"
+                f"**זכייה:** 💰 פרשת בזמן וזכית ב-**{winnings}** טיקטים!"
+            ),
+            color=discord.Color.green()
+        )
+        new_view = MinesView(view.bet, view.bombs_count, view.bomb_positions, view.user_id, view.revealed, game_over=True)
+        await interaction.response.edit_message(embed=embed, view=new_view)
 # ==========================================
 #         🎰 משחק 3: רולטה (Roulette)
 # ==========================================
@@ -1174,7 +1263,7 @@ class RouletteView(discord.ui.View):
     @discord.ui.button(label="🟢 ירוק 0 (x14)", style=discord.ButtonStyle.success)
     async def green(self, interaction: discord.Interaction, b: discord.ui.Button): await self.play(interaction, "ירוק")
 # ==========================================
-#         🗼 משחק 4: טאואר (Tower)
+# 🗼 משחק 4: טאואר (Tower)
 # ==========================================
 
 class TowerModal(discord.ui.Modal, title="🗼 משחק טאואר"):
@@ -1185,14 +1274,22 @@ class TowerModal(discord.ui.Modal, title="🗼 משחק טאואר"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if is_user_banned(interaction.user.id): return
-        try: bet = int(self.bet_input.value)
-        except ValueError: return
+        try: 
+            bet = int(self.bet_input.value)
+        except ValueError: 
+            return
         u = get_user_data(interaction.user.id)
         if u["tickets"] < bet or bet <= 0: return
 
         update_tickets(interaction.user.id, -bet)
-        tower_data = [random.randint(0, 2) for _ in range(5)]
-        embed = discord.Embed(title="🗼 מגדל הטאואר - קומה 1", description=f"הימור: **{bet}** טיקטים.\nבחר תא בטוח כדי לטפס למעלה!", color=discord.Color.blue())
+        # 4 תאים בכל שורה (אינדקסים 0 עד 3), מתוכם פצצה 1 אקראית
+        tower_data = [random.randint(0, 3) for _ in range(5)]
+        
+        embed = discord.Embed(
+            title="🗼 מגדל הטאואר - קומה 1", 
+            description=f"הימור: **{bet}** טיקטים.\n⚠️ בכל שורה יש **פצצה אחת** מתוך 4 תאים!\nבחר תא בטוח כדי לטפס למעלה!", 
+            color=discord.Color.blue()
+        )
         await interaction.response.send_message(embed=embed, view=TowerView(tower_data, 0, bet, interaction.user.id), ephemeral=True)
 
 class TowerView(discord.ui.View):
@@ -1200,8 +1297,13 @@ class TowerView(discord.ui.View):
     def __init__(self, tower_data, floor, bet, user_id):
         super().__init__(timeout=90)
         self.tower_data, self.floor, self.bet, self.user_id = tower_data, floor, bet, user_id
-        for i in range(3): self.add_item(TowerButton(i))
-        if self.floor > 0: self.add_item(TowerCashout())
+        
+        # יצירת 4 כפתורים במקום 3
+        for i in range(4): 
+            self.add_item(TowerButton(i))
+            
+        if self.floor > 0: 
+            self.add_item(TowerCashout())
 
 class TowerButton(discord.ui.Button):
     def __init__(self, index):
@@ -1210,11 +1312,13 @@ class TowerButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         view: TowerView = self.view
-        if interaction.user.id != view.user_id: return
+        if interaction.user.id != view.user_id:
+            return await interaction.response.send_message("זה לא המשחק שלך!", ephemeral=True)
 
         if self.index == view.tower_data[view.floor]:
             embed = discord.Embed(title="💥 המגדל קרס! פגעת במלכודת!", description=f"הפסדת {view.bet} טיקטים בקומה {view.floor + 1}.", color=discord.Color.red())
-            for child in view.children: child.disabled = True
+            for child in view.children: 
+                child.disabled = True
             await interaction.response.edit_message(embed=embed, view=view)
             return
 
@@ -1222,23 +1326,33 @@ class TowerButton(discord.ui.Button):
         if view.floor == 5:
             winnings = int(view.bet * 5.5)
             update_tickets(view.user_id, winnings)
-            embed = discord.Embed(title="🏆 כבשת את הטאואר!", description=f"הגעת לפסגה! זכת ב-**{winnings}** טיקטים!", color=discord.Color.gold())
-            for child in view.children: child.disabled = True
+            embed = discord.Embed(title="🏆 כבשת את הטאואר!", description=f"הגעת לפסגה! זכית ב-**{winnings}** טיקטים!", color=discord.Color.gold())
+            for child in view.children: 
+                child.disabled = True
             await interaction.response.edit_message(embed=embed, view=view)
             return
 
-        embed = discord.Embed(title=f"🗼 מגדל הטאואר - קומה {view.floor + 1}", description=f"עלית קומה! מכפיל נוכחי: **{view.multipliers[view.floor-1]}x**", color=discord.Color.blue())
+        embed = discord.Embed(
+            title=f"🗼 מגדל הטאואר - קומה {view.floor + 1}", 
+            description=f"עלית קומה! מכפיל נוכחי: **{view.multipliers[view.floor-1]}x**\n⚠️ בכל שורה יש **פצצה אחת** מתוך 4 תאים!", 
+            color=discord.Color.blue()
+        )
         await interaction.response.edit_message(embed=embed, view=TowerView(view.tower_data, view.floor, view.bet, view.user_id))
 
 class TowerCashout(discord.ui.Button):
-    def __init__(self): super().__init__(label="💰 משוך כסף", style=discord.ButtonStyle.gold, row=1)
+    def __init__(self): 
+        super().__init__(label="💰 משוך כסף", style=discord.ButtonStyle.success, row=1)
+        
     async def callback(self, interaction: discord.Interaction):
         view: TowerView = self.view
-        if interaction.user.id != view.user_id: return
-        winnings = int(view.bet * view.multipliers[view.current_floor - 1] if hasattr(view, 'current_floor') else view.bet * view.multipliers[view.floor - 1])
+        if interaction.user.id != view.user_id:
+            return await interaction.response.send_message("זה לא המשחק שלך!", ephemeral=True)
+            
+        winnings = int(view.bet * view.multipliers[view.floor - 1])
         update_tickets(view.user_id, winnings)
-        embed = discord.Embed(title="💰 משיכת כסף מושלמת!", description=f"פרשת בזמן וזכת ב-**{winnings}** טיקטים!", color=discord.Color.green())
-        for child in view.children: child.disabled = True
+        embed = discord.Embed(title="💰 משיכת כסף מושלמת!", description=f"פרשת בזמן וזכית ב-**{winnings}** טיקטים!", color=discord.Color.green())
+        for child in view.children: 
+            child.disabled = True
         await interaction.response.edit_message(embed=embed, view=view)
 # ==========================================
 #         👑 משחק 5: פוקר וידאו (Poker)
