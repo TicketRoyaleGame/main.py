@@ -1191,7 +1191,7 @@ class BlackjackActionButton(discord.ui.Button):
             )
             await interaction.edit_original_response(embed=embed, view=BlackjackView(game))
 # ==========================================
-# 💣 משחק Mines (עם בחירת גודל לוח 3x3 עד 8x8)
+# 💣 משחק Mines (בנפרד)
 # ==========================================
 
 class MinesSetupModal(discord.ui.Modal, title="💣 הגדרת משחק Mines"):
@@ -1206,24 +1206,25 @@ class MinesSetupModal(discord.ui.Modal, title="💣 הגדרת משחק Mines"):
         self.add_item(self.mines_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
         try:
             bet = int(self.bet_input.value)
             grid_size = int(self.size_input.value)
             bombs_count = int(self.mines_input.value)
         except ValueError:
-            return await interaction.response.send_message("❌ אנא הכנס מספרים תקינים בלבד!", ephemeral=True)
+            return await interaction.followup.send("❌ אנא הכנס מספרים תקינים בלבד!", ephemeral=True)
 
-        # בדיקת גודל לוח מותר (אך ורק 3 עד 8)
         if grid_size not in [3, 4, 5, 6, 7, 8]:
-            return await interaction.response.send_message("❌ גודל הלוח חייב להיות אחד מהבאים בלבד: 3, 4, 5, 6, 7 או 8!", ephemeral=True)
+            return await interaction.followup.send("❌ גודל הלוח חייב להיות אחד מהבאים בלבד: 3, 4, 5, 6, 7 או 8!", ephemeral=True)
 
         total_tiles = grid_size * grid_size
         if not (1 <= bombs_count < total_tiles):
-            return await interaction.response.send_message(f"❌ כמות הפצצות חייבת להיות בין 1 ל-{total_tiles - 1} בלוח בגודל {grid_size}x{grid_size}!", ephemeral=True)
+            return await interaction.followup.send(f"❌ כמות הפצצות חייבת להיות בין 1 ל-{total_tiles - 1} בלוח בגודל {grid_size}x{grid_size}!", ephemeral=True)
 
         u = get_user_data(interaction.user.id)
         if u["tickets"] < bet or bet <= 0:
-            return await interaction.response.send_message("❌ אין לך מספיק טיקטים להימור זה!", ephemeral=True)
+            return await interaction.followup.send("❌ אין לך מספיק טיקטים להימור זה!", ephemeral=True)
 
         update_tickets(interaction.user.id, -bet)
 
@@ -1240,7 +1241,7 @@ class MinesSetupModal(discord.ui.Modal, title="💣 הגדרת משחק Mines"):
             ),
             color=discord.Color.dark_embed()
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=embed, 
             view=MinesDynamicView(bet, grid_size, bombs_count, bomb_positions, interaction.user.id), 
             ephemeral=True
@@ -1746,7 +1747,7 @@ async def daily(interaction: discord.Interaction):
     save_data(data)
     await interaction.response.send_message(f"🪙 קיבלת **20 טיקטים** חינם! המאזן שלך: **{get_user_data(user_id)['tickets']}** טיקטים.")
 # ==========================================
-# 🎟️ מערכת קופונים ופקודת Drop (למנהל בלבד)
+# 🎟️ מערכת קופונים ופקודת Drop
 # ==========================================
 
 COUPONS = {} # מבנה: {"CODE": {"amount": 100, "used_by": []}}
@@ -1812,7 +1813,6 @@ class DropView(discord.ui.View):
         embed.color = discord.Color.dark_gray()
         
         await interaction.response.edit_message(embed=embed, view=self)
-                                            
 # ==========================================
 #          🤖 הפעלת הבוט המלאה
 # ==========================================
