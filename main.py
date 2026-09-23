@@ -1276,8 +1276,7 @@ def evaluate_poker_hand(hand):
         if count_values == 3 and count_values == 2: return "פול האוס (Full House) 🏠", 7
         if count_values == 3: return "שלשה (Three of a Kind) 🥉", 3
         if count_values == 2 and count_values == 2: return "זוגיים (Two Pair) 👥", 2
-
-    return "ללא שילוב גבוה", 0
+        return "ללא שילוב גבוה", 0
 
 class PokerView(discord.ui.View):
     def __init__(self, player_hand, deck, bet, user_id):
@@ -1308,88 +1307,74 @@ class PokerDrawButton(discord.ui.Button):
         final_hand = [view.player_hand[i] if i in view.holds else view.deck.pop() for i in range(5)]
         name, mult = evaluate_poker_hand(final_hand)
         winnings = int(view.bet * mult)
-        
         if winnings > 0: update_tickets(view.user_id, winnings)
         for child in view.children: child.disabled = True
-        
         embed = discord.Embed(title="👑 תוצאות פוקר", description=f"היד הסופית שלך:\n`{ ' | '.join(final_hand) }` \n\n📊 שילוב שהתקבל: **{name}**", color=discord.Color.green() if winnings > 0 else discord.Color.red())
         embed.set_footer(text=f"זכת ב-{winnings} טיקטים!" if winnings > 0 else f"הפסדת {view.bet} טיקטים.")
         await interaction.response.edit_message(embed=embed, view=view)
+
 # ==========================================
 #     🎮 לוח המשחקים הציבורי של השרת
 # ==========================================
 
 class CasinoPublicLobbyView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
+    def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="🃏 בלאק ג'ק", style=discord.ButtonStyle.primary, custom_id="lobby_bj")
-    async def bj_click(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BlackjackModal())
-
+    async def bj_click(self, interaction: discord.Interaction, b: discord.ui.Button): await interaction.response.send_modal(BlackjackModal())
     @discord.ui.button(label="🗼 טאואר", style=discord.ButtonStyle.primary, custom_id="lobby_tw")
-    async def tw_click(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(TowerModal())
-
+    async def tw_click(self, interaction: discord.Interaction, b: discord.ui.Button): await interaction.response.send_modal(TowerModal())
     @discord.ui.button(label="💣 מיין (Mines)", style=discord.ButtonStyle.primary, custom_id="lobby_mn")
-    async def mn_click(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(MinesModal())
-
+    async def mn_click(self, interaction: discord.Interaction, b: discord.ui.Button): await interaction.response.send_modal(MinesModal())
     @discord.ui.button(label="🎰 רולטה", style=discord.ButtonStyle.primary, custom_id="lobby_rl")
-    async def rl_click(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RouletteModal())
-
+    async def rl_click(self, interaction: discord.Interaction, b: discord.ui.Button): await interaction.response.send_modal(RouletteModal())
     @discord.ui.button(label="👑 פוקר", style=discord.ButtonStyle.primary, custom_id="lobby_pk")
-    async def pk_click(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PokerModal())
+    async def pk_click(self, interaction: discord.Interaction, b: discord.ui.Button): await interaction.response.send_modal(PokerModal())
+
 # ==========================================
 #        👑 פאנלים ומערכות ניהול אזולאי
 # ==========================================
 
 class AzoulaiManageModal(discord.ui.Modal):
     def __init__(self, action_type):
-        super().__init__(title=f"ניהול מנהל - {action_type}")
+        super().__init__(title=f"ניהול - {action_type}")
         self.action_type = action_type
-        self.user_input = discord.ui.TextInput(label="הזן שם משתמש או מזהה (ID)", placeholder="הכנס ID של המשתמש...", required=True)
+        self.user_input = discord.ui.TextInput(label="הזן מזהה משתמש (ID)", placeholder="הכנס ID...", required=True)
         self.add_item(self.user_input)
         if "טוקנים" in action_type:
-            self.amount_input = discord.ui.TextInput(label="כמות טיקטים", placeholder="לדוגמה: 50", min_length=1)
+            self.amount_input = discord.ui.TextInput(label="כמות טיקטים", placeholder="לדוגמה: 50")
             self.add_item(self.amount_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
-            await handle_security_breach(interaction, f"AzoulaiManageModal - {self.action_type}")
+            await handle_security_breach(interaction, f"Modal-{self.action_type}")
             return
-        
         try: target_id = int(self.user_input.value.strip())
         except ValueError:
-            await interaction.response.send_message("❌ מזהה משתמש שגוי.", ephemeral=True)
+            await interaction.response.send_message("❌ מזהה משתמש לא חוקי.", ephemeral=True)
             return
-
         if "טוקנים" in self.action_type:
             try: amt = int(self.amount_input.value.strip())
             except ValueError: return
             update_tickets(target_id, amt)
-            await interaction.response.send_message(f"✅ נוספו בהצלחה {amt} טיקטים למשתמש <@{target_id}>.", ephemeral=True)
+            await interaction.response.send_message(f"✅ נוספו {amt} טיקטים ל-<@{target_id}>.", ephemeral=True)
         else:
             try:
                 member = await interaction.guild.fetch_member(target_id)
-                await interaction.guild.ban(member, reason="הושעה דרך פאנל הניהול של אזולאי")
-                await interaction.response.send_message(f"🔨 המשתמש {member.mention} קיבל באן בהצלחה.", ephemeral=True)
+                await interaction.guild.ban(member, reason="פאנל אזולאי")
+                await interaction.response.send_message(f"🔨 בוצע באן ל-{member.mention}.", ephemeral=True)
             except Exception as e:
-                await interaction.response.send_message(f"❌ שגיאה בביצוע הבאן: {e}", ephemeral=True)
+                await interaction.response.send_message(f"❌ שגיאה: {e}", ephemeral=True)
 
 class AzoulaiAdminPanelButtons(discord.ui.View):
     def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="🔨 באנים וקיקים", style=discord.ButtonStyle.danger, custom_id="az_ban")
     async def b_click(self, interaction: discord.Interaction, b: discord.ui.Button):
-        if interaction.user.id != OWNER_ID: await handle_security_breach(interaction, "פאנל אזולאי - כפתור באן"); return
+        if interaction.user.id != OWNER_ID: await handle_security_breach(interaction, "כפתור באן"); return
         await interaction.response.send_modal(AzoulaiManageModal("באן ליום"))
     @discord.ui.button(label="🪙 ניהול טוקנים", style=discord.ButtonStyle.success, custom_id="az_tok")
     async def t_click(self, interaction: discord.Interaction, b: discord.ui.Button):
-        if interaction.user.id != OWNER_ID: await handle_security_breach(interaction, "פאנל אזולאי - כפתור טוקנים"); return
-        await interaction.response.send_modal(AzoulaiManageModal("הוספת טוקנים"))
-
+        if interaction.user.id != OWNER_ID: await handle_security_breach(interaction, "כפתור טוקנים"); return
+        await interaction.response.send_modal(AzoulaiManageModal("ניהול טוקנים"))
 
 # ==========================================
 #             🚀 פקודות סלאש סופיות
@@ -1403,13 +1388,10 @@ async def panel_azoulai(interaction: discord.Interaction):
     embed = discord.Embed(title="👑 פאנל אזולאי - Ticket Royale", description="מערכת ניהול בלעדית:", color=discord.Color.gold())
     await interaction.response.send_message(embed=embed, view=AzoulaiAdminPanelButtons(), ephemeral=True)
 
-@bot.tree.command(name="פאנל", description="הצגת לוח משחקי הקזינו לחברי השרת")
+@bot.tree.command(name="משחקים", description="הצגת לוח משחקי הקזינו לחברי השרת")
 async def panel_public(interaction: discord.Interaction):
     if is_user_banned(interaction.user.id): return
-    if interaction.user.id != OWNER_ID:
-        await handle_security_breach(interaction, "/פאנל ציבורי")
-        return
-    embed = discord.Embed(title="🎰 קזינו Ticket Royale - פאנל משחקים", description="כל המשחקים פעילים! לחצו למטה כדי להמר ולשחק:", color=discord.Color.purple())
+    embed = discord.Embed(title="🎰 קזינו Ticket Royale", description="כל המשחקים פעילים! לחצו למטה כדי להמר ולשחק:", color=discord.Color.purple())
     await interaction.response.send_message(embed=embed, view=CasinoPublicLobbyView(), ephemeral=False)
 
 @bot.tree.command(name="דיילי", description="קבל 20 טיקטים חינם בכל 24 שעות")
@@ -1424,18 +1406,16 @@ async def daily(interaction: discord.Interaction):
     if u.get("last_daily"):
         last_claim = datetime.fromisoformat(u["last_daily"]).replace(tzinfo=timezone.utc)
         if now < last_claim + timedelta(hours=24):
-            time_left = (last_claim + timedelta(hours=24)) - now
-            hours, remainder = divmod(time_left.seconds, 3600)
-            minutes, _ = divmod(remainder, 60)
-            await interaction.response.send_message(f"❌ תוכל לאסוף שוב בעוד {hours} שעות ו-{minutes} דקות.", ephemeral=True)
+            tl = (last_claim + timedelta(hours=24)) - now
+            h, rem = divmod(tl.seconds, 3600); m, _ = divmod(rem, 60)
+            await interaction.response.send_message(f"❌ תוכל לאסוף שוב בעוד {h} שעות ו-{m} דקות.", ephemeral=True)
             return
 
     update_tickets(user_id, 20)
     data = load_data()
     data[uid_str]["last_daily"] = now.isoformat()
     save_data(data)
-    await interaction.response.send_message(f"🪙 קיבלת **20 טיקטים** חינם! המאזן שלך: **{get_user_data(user_id)['tickets']}** טיקטים. 🎫")
-
+    await interaction.response.send_message(f"🪙 קיבלת **20 טיקטים** חינם! המאזן שלך: **{get_user_data(user_id)['tickets']}** טיקטים.")
 
 # ==========================================
 #          🤖 הפעלת הבוט המלאה
@@ -1446,4 +1426,4 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 if TOKEN:
     bot.run(TOKEN)
 else:
-    bot.run("MTU1MjA3NTQyMjI5OTIwMTU2Ng.GvMTSU.GHHvIbhn3jYLM7rrNVYQumdLJdnUe9jPCoHsos")
+    bot.run("החלף_בטוקן_הסודי_האמיתי_שלך")
